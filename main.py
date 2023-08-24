@@ -1,10 +1,12 @@
 #import math
 import numpy as np
+import toml
 #import tqdm
 # import torch
 #import torch.nn as nn
 import gspread
-#import json
+import json
+from google.oauth2 import service_account
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -16,8 +18,7 @@ from sklearn.model_selection import train_test_split
 #from sklearn import metrics
 import streamlit as st
 
-ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
-SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
+
 SHEET_NAME = 'sony_2000_2023'
 
 scopes = [
@@ -25,7 +26,14 @@ scopes = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-# Credentials 情報を取得
+# デプロイ時有効にする
+#ACCESS_KEY_JSON = st.secrets["gcp_service_account"]
+#SPREAD_SHEET_KEY = st.secrets["SpreadSheetKey"]["SPREAD_SHEET_KEY"]
+#credentials = service_account.Credentials.from_service_account_info( st.secrets["gcp_service_account"], scopes=scopes)
+
+#テスト時有効にする
+ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
+SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
 credentials = ServiceAccountCredentials.from_json_keyfile_name(ACCESS_KEY_JSON, scopes)
 
 #OAuth2のクレデンシャルを使用してGoogleAPIにログイン
