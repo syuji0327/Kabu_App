@@ -16,7 +16,7 @@ from sklearn.model_selection import train_test_split
 #from sklearn import metrics
 import streamlit as st
 
-ACCESS_KEY_JSON = "kabuapp-d47e1f69fa4b.json"
+ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
 SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
 SHEET_NAME = 'sony_2000_2023'
 
@@ -107,8 +107,8 @@ def add_technical_indicators(df):
 
     return df.dropna()
 
-# シミュレーション関数
-def simulate_trading(data, start_date, end_date, initial_funds, transaction_fee):
+# シミュレーション関数　(ランダム売買判断)
+def simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit):
     data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
     balance = initial_funds
     stocks = 0
@@ -118,8 +118,8 @@ def simulate_trading(data, start_date, end_date, initial_funds, transaction_fee)
         decision = np.random.choice(['Buy', 'Sell', 'Hold'])  # ランダムに売買判断
 
         if decision == 'Buy':
-            if balance >= row['Open'] + transaction_fee:  # 手数料を考慮して購入可能な場合
-                stocks_to_buy = (balance - transaction_fee) // row['Open']
+            if balance >= (row['Open'] * min_purchase_unit) + transaction_fee:  # 手数料を考慮して購入可能な場合
+                stocks_to_buy = (balance - transaction_fee) // (row['Open'] * min_purchase_unit) * min_purchase_unit
                 stocks += stocks_to_buy
                 balance -= (stocks_to_buy * row['Open'] + transaction_fee)
 
@@ -128,6 +128,39 @@ def simulate_trading(data, start_date, end_date, initial_funds, transaction_fee)
                 balance += stocks * row['Open']
                 balance -= transaction_fee
                 stocks = 0
+
+        holdings.append(balance + stocks * row['Close'])
+
+    return holdings
+
+
+# シミュレーション関数（予測売買判断）
+def simulate_predicted_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit):
+    data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
+    balance = initial_funds
+    stocks = 0
+    holdings = []
+
+    for index, row in data.iterrows():
+        if index + 1 < len(data):
+            next_day_open = data.at[index + 1, 'Open']
+            next_day_close = data.at[index + 1, 'Close_pred']
+
+            if next_day_close > row['Close'] + trading_standard_fee:
+                # パターンA
+                if balance >= next_day_open + transaction_fee:
+                    stocks_to_buy = (balance - transaction_fee) // next_day_open // min_purchase_unit * min_purchase_unit
+                    stocks += stocks_to_buy
+                    balance -= (stocks_to_buy * next_day_open + transaction_fee)
+            elif next_day_close < row['Close'] - trading_standard_fee:
+                # パターンB
+                if stocks > 0:
+                    balance += stocks * next_day_open
+                    balance -= transaction_fee
+                    stocks = 0
+            else:
+                # パターンC
+                pass
 
         holdings.append(balance + stocks * row['Close'])
 
@@ -151,8 +184,6 @@ y_train = train_data['Close']
 
 X_test = test_data.drop(['Date', 'Close'], axis=1)
 y_test = test_data['Close']
-
-train_data.shape, test_data.shape
 
 # LightGBM用のデータセットに変換
 train_data = lgb.Dataset(X_train, label=y_train)
@@ -210,42 +241,108 @@ sim_pred = loaded_model.predict(sim_data_X)
 # 推論結果をDataFrameに追加
 sim_data['Close_pred'] = sim_pred
 
-print(sim_data)
-
 # メイン部分
 st.title('株価シミュレーションと評価額グラフ')
 
 uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type=['csv'])
 
+# 警告を非表示
+st.set_option('deprecation.showPyplotGlobalUse', False)
+
 if uploaded_file is not None:
     data = pd.read_csv(uploaded_file)
     data['Date'] = pd.to_datetime(data['Date'])
     
-    st.subheader('株価データ')
+    st.subheader('アップロードした株価データ')
+    #元データの表
     st.dataframe(data)
+    #元データのグラフ
+    plot_chart(df)
 
-    # サイドバーからシミュレーション設定を取得
+   # サイドバーからシミュレーション設定を取得
     min_date = data['Date'].min()
     max_date = data['Date'].max()
     start_date = st.sidebar.date_input("シミュレーション開始日", min_date, min_value=min_date, max_value=max_date)
     end_date = st.sidebar.date_input("シミュレーション終了日", max_date, min_value=min_date, max_value=max_date)
     start_date = pd.to_datetime(start_date)  # datetime64[ns]型に変換
     end_date = pd.to_datetime(end_date)      # datetime64[ns]型に変換
-    initial_funds = st.sidebar.number_input("初期資金 (円)", min_value=1000000)
+    initial_funds = st.sidebar.number_input("初期資金 (円)", min_value=0)
     transaction_fee = st.sidebar.number_input("売買手数料 (円)", min_value=0)
+    trading_standard_fee = st.sidebar.number_input("許容値動き (円)", min_value=0)
+    min_purchase_unit = st.sidebar.radio("最小購入単位", options=[1, 100], index=1)  # 100株を選択
+
+    holdings_random = simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
+    holdings_predicted = simulate_predicted_trading(sim_data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
+    final_evaluation_random = holdings_random[-1]
+    final_evaluation_predicted = holdings_predicted[-1]
+
+    # グラフ表示
+    fig1, ax1 = plt.subplots()
+    ax1.plot(data[data['Date'].between(start_date, end_date)]['Date'], holdings_random, label='ランダム売買')
+    ax1.set_xlabel('Date')
+    ax1.set_ylabel('assets [yen]')
+    #ax1.text(end_date, final_evaluation_random, f'最終評価額: {final_evaluation_random:.0f}', verticalalignment='bottom', horizontalalignment='right', fontsize=10)
+    st.subheader('ランダム売買の評価額のグラフ')
+    # シミュレーション結果の最終評価額を表示
+    st.write(f"もしあなたが毎日あてずっぽうで売買を行った場合・・・")
+    st.write(f"シミュレーション終了日の評価額は{holdings_random[-1]:,.0f} 円です")
+    st.write(f"初期資金からの収支は{holdings_random[-1] - initial_funds:,.0f} 円です")
+    st.pyplot(fig1)
     
-    holdings = simulate_trading(data, start_date, end_date, initial_funds, transaction_fee)
+
+    fig2, ax2 = plt.subplots()
+    ax2.plot(sim_data[sim_data['Date'].between(start_date, end_date)]['Date'], holdings_predicted, label='予測売買')
+    ax2.set_xlabel('Date')
+    ax2.set_ylabel('assets [yen]')
+    #ax2.text(end_date, final_evaluation_predicted, f'最終評価額: {final_evaluation_predicted:.0f}', verticalalignment='bottom', horizontalalignment='right', fontsize=10)
+    st.subheader('予測売買の評価額のグラフ')
+    # シミュレーション結果の最終評価額を表示
+    st.write(f"もしあなたが私の予報に従って売買を行った場合・・・")
+    st.write(f"シミュレーション終了日の評価額は{holdings_predicted[-1]:,.0f} 円です")
+    st.write(f"初期資金からの収支は{holdings_predicted[-1] - initial_funds:,.0f} 円です")
+    st.pyplot(fig2)
+
+
+    st.subheader('(備考)予測データ')
+    st.write('2022-12-31までを学習に使用しました')
+    st.write('予測開始日時：'+ sim_start_date)
+    plot_chart2(sim_data)
+    st.dataframe(sim_data)
+
+
+
+
+'''
+# メイン部分
+st.title('株価シミュレーションと評価額グラフ')
+
+uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type=['csv'])
+
+if uploaded_file is not None:
+
+    
+    holdings = simulate_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
 
     # 警告を非表示
     st.set_option('deprecation.showPyplotGlobalUse', False)
 
+    if st.button('シミュレーション開始'):
+            st.subheader('ランダムな売買シミュレーション結果')
+            holdings_random = simulate_random(data, initial_funds, transaction_fee)
+            # ランダムな売買の評価額を描画
+
+            st.subheader('予測に基づく売買シミュレーション結果')
+            holdings_predict = simulate_predict(data, initial_funds, transaction_fee)
+            # 予測に基づく売買の評価額を描画
     # グラフ表示
     fig, ax = plt.subplots()
     ax.plot(data[data['Date'].between(start_date, end_date)]['Date'], holdings, label='評価額')
     ax.set_xlabel('date')
     ax.set_ylabel('your assets (yen)')
     #ax.legend()
-    st.subheader('当て感で売買した際の評価額のグラフ')
+    st.subheader('当て感で売買した場合のシミュレーション結果')
+    # シミュレーション結果の最終評価額を表示
+    st.write(f"シミュレーション終了日の評価額: {holdings[-1]:,.0f} 円")
     st.pyplot(fig)
 
     # グラフの表示
@@ -257,7 +354,7 @@ if uploaded_file is not None:
     plot_chart2(sim_data)
 
 
-'''
+
 # Streamlit App
 def main():
     # stleamlit タイトルとテキストを記入
