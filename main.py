@@ -27,14 +27,14 @@ scopes = [
 ]
 
 # デプロイ時有効にする
-#ACCESS_KEY_JSON = st.secrets["gcp_service_account"]
-#SPREAD_SHEET_KEY = st.secrets["SpreadSheetKey"]["SPREAD_SHEET_KEY"]
-#credentials = service_account.Credentials.from_service_account_info( st.secrets["gcp_service_account"], scopes=scopes)
+ACCESS_KEY_JSON = st.secrets["gcp_service_account"]
+SPREAD_SHEET_KEY = st.secrets["SpreadSheetKey"]["SPREAD_SHEET_KEY"]
+credentials = service_account.Credentials.from_service_account_info( st.secrets["gcp_service_account"], scopes=scopes)
 
 #テスト時有効にする
-ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
-SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
-credentials = ServiceAccountCredentials.from_json_keyfile_name(ACCESS_KEY_JSON, scopes)
+#ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
+#SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
+#credentials = ServiceAccountCredentials.from_json_keyfile_name(ACCESS_KEY_JSON, scopes)
 
 #OAuth2のクレデンシャルを使用してGoogleAPIにログイン
 gc = gspread.authorize(credentials)
