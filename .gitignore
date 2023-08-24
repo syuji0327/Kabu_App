@@ -2,6 +2,7 @@
 
 # Virtual environment
 env/
+old/
 
 # Cached files
 __pycache__/
