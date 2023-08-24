@@ -33,7 +33,7 @@ credentials = service_account.Credentials.from_service_account_info( st.secrets[
 
 #テスト時有効にする
 #ACCESS_KEY_JSON = "env\API_key\kabuapp-d47e1f69fa4b.json"
-#SPREAD_SHEET_KEY = "14AcFe46sjuzkTuxk3T28hq4bhgEWRDJiLHL5ifHnctM"
+#SPREAD_SHEET_KEY = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 #credentials = ServiceAccountCredentials.from_json_keyfile_name(ACCESS_KEY_JSON, scopes)
 
 #OAuth2のクレデンシャルを使用してGoogleAPIにログイン
@@ -116,7 +116,7 @@ def add_technical_indicators(df):
     return df.dropna()
 
 # シミュレーション関数　(ランダム売買判断)
-def simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit):
+def simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee):
     data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
     balance = initial_funds
     stocks = 0
@@ -143,7 +143,7 @@ def simulate_random_trading(data, start_date, end_date, initial_funds, transacti
 
 
 # シミュレーション関数（予測売買判断）
-def simulate_predicted_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit):
+def simulate_predicted_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee):
     data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
     balance = initial_funds
     stocks = 0
@@ -156,23 +156,76 @@ def simulate_predicted_trading(data, start_date, end_date, initial_funds, transa
 
             if next_day_close > row['Close'] + trading_standard_fee:
                 # パターンA
-                if balance >= next_day_open + transaction_fee:
-                    stocks_to_buy = (balance - transaction_fee) // next_day_open // min_purchase_unit * min_purchase_unit
+                print("パターンA(購入)")
+                if balance >= (next_day_open * min_purchase_unit) + transaction_fee:
+                    stocks_to_buy = (balance - transaction_fee) // (next_day_open * min_purchase_unit) * min_purchase_unit
                     stocks += stocks_to_buy
                     balance -= (stocks_to_buy * next_day_open + transaction_fee)
+                    print("購入成功")
+                    print("購入株数", stocks_to_buy)
+                    print("所持株数", stocks)
+                    print("収支", balance)
             elif next_day_close < row['Close'] - trading_standard_fee:
                 # パターンB
+                print("パターンB(売却)")
                 if stocks > 0:
                     balance += stocks * next_day_open
                     balance -= transaction_fee
                     stocks = 0
+                    print("所持株数", stocks)
+                    print("収支", balance)
             else:
                 # パターンC
+                print("パターンC(保留)")
                 pass
 
         holdings.append(balance + stocks * row['Close'])
 
     return holdings
+
+def simulate_trading_with_details(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee):
+    data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
+    balance = initial_funds
+    stocks = 0
+    holdings = []  # 各日の評価額を格納するリスト
+    trading_details = []  # 取引詳細を格納するリスト
+
+    for index, row in data.iterrows():
+        if index + 1 < len(data):
+            next_day_open = data.at[index + 1, 'Open']
+            next_day_close = data.at[index + 1, 'Close_pred']
+            trade_result = None
+
+            if next_day_close > row['Close'] + trading_standard_fee:
+                if balance >= (next_day_open * min_purchase_unit) + transaction_fee:
+                    stocks_to_buy = (balance - transaction_fee) // (next_day_open * min_purchase_unit) * min_purchase_unit
+                    stocks += stocks_to_buy
+                    balance -= (stocks_to_buy * next_day_open + transaction_fee)
+                    trade_result = "Buy"
+            elif next_day_close < row['Close'] - trading_standard_fee:
+                if stocks > 0:
+                    balance += stocks * next_day_open
+                    balance -= transaction_fee
+                    stocks = 0
+                    trade_result = "Sell"
+            else:
+                trade_result = "Hold"
+
+            trading_details.append({
+                'index': index,
+                'Date': row['Date'],
+                'TradeResult': trade_result,
+                'StocksToBuy': stocks_to_buy if trade_result == "Buy" else None,
+                'Stocks': stocks,
+                'Balance': balance,
+            })
+
+        holdings.append(balance + stocks * row['Close'])
+
+    # 取引詳細をDataFrameに変換
+    trading_details_df = pd.DataFrame(trading_details)
+
+    return trading_details_df
 
 
 # 新たなテクニカル指標を追加
@@ -232,8 +285,6 @@ print(f"テストデータの平均二乗誤差：{mse}")
 # 保存した学習モデルの読み込み
 loaded_model = lgb.Booster(model_file='stock_price_prediction_model.txt')
 
-
-
 # 直近1年のテストデータから翌日の株価を推論
 recent_data = df2[-365:].drop(columns=['Date', 'Close'])
 recent_pred = loaded_model.predict(recent_data)
@@ -248,6 +299,8 @@ sim_pred = loaded_model.predict(sim_data_X)
 
 # 推論結果をDataFrameに追加
 sim_data['Close_pred'] = sim_pred
+
+sim_data = sim_data.reset_index()
 
 # メイン部分
 st.title('株価シミュレーションと評価額グラフ')
@@ -268,7 +321,7 @@ if uploaded_file is not None:
     plot_chart(df)
 
    # サイドバーからシミュレーション設定を取得
-    min_date = data['Date'].min()
+    min_date = sim_data['Date'].min()
     max_date = data['Date'].max()
     start_date = st.sidebar.date_input("シミュレーション開始日", min_date, min_value=min_date, max_value=max_date)
     end_date = st.sidebar.date_input("シミュレーション終了日", max_date, min_value=min_date, max_value=max_date)
@@ -279,8 +332,11 @@ if uploaded_file is not None:
     trading_standard_fee = st.sidebar.number_input("許容値動き (円)", min_value=0)
     min_purchase_unit = st.sidebar.radio("最小購入単位", options=[1, 100], index=1)  # 100株を選択
 
-    holdings_random = simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
-    holdings_predicted = simulate_predicted_trading(sim_data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
+    holdings_random = simulate_random_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee)
+    holdings_predicted = simulate_predicted_trading(sim_data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee)
+    # デバッグ用
+    ditele_df = simulate_trading_with_details(sim_data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit, trading_standard_fee)
+
     final_evaluation_random = holdings_random[-1]
     final_evaluation_predicted = holdings_predicted[-1]
 
@@ -310,81 +366,12 @@ if uploaded_file is not None:
     st.write(f"初期資金からの収支は{holdings_predicted[-1] - initial_funds:,.0f} 円です")
     st.pyplot(fig2)
 
+    #元データの表
+    st.write(f"各日の売買履歴")
+    st.dataframe(ditele_df)
 
     st.subheader('(備考)予測データ')
     st.write('2022-12-31までを学習に使用しました')
     st.write('予測開始日時：'+ sim_start_date)
     plot_chart2(sim_data)
     st.dataframe(sim_data)
-
-
-
-
-'''
-# メイン部分
-st.title('株価シミュレーションと評価額グラフ')
-
-uploaded_file = st.file_uploader("CSVファイルをアップロードしてください", type=['csv'])
-
-if uploaded_file is not None:
-
-    
-    holdings = simulate_trading(data, start_date, end_date, initial_funds, transaction_fee, min_purchase_unit)
-
-    # 警告を非表示
-    st.set_option('deprecation.showPyplotGlobalUse', False)
-
-    if st.button('シミュレーション開始'):
-            st.subheader('ランダムな売買シミュレーション結果')
-            holdings_random = simulate_random(data, initial_funds, transaction_fee)
-            # ランダムな売買の評価額を描画
-
-            st.subheader('予測に基づく売買シミュレーション結果')
-            holdings_predict = simulate_predict(data, initial_funds, transaction_fee)
-            # 予測に基づく売買の評価額を描画
-    # グラフ表示
-    fig, ax = plt.subplots()
-    ax.plot(data[data['Date'].between(start_date, end_date)]['Date'], holdings, label='評価額')
-    ax.set_xlabel('date')
-    ax.set_ylabel('your assets (yen)')
-    #ax.legend()
-    st.subheader('当て感で売買した場合のシミュレーション結果')
-    # シミュレーション結果の最終評価額を表示
-    st.write(f"シミュレーション終了日の評価額: {holdings[-1]:,.0f} 円")
-    st.pyplot(fig)
-
-    # グラフの表示
-    st.subheader('終値と日時を表示')
-    plot_chart(df)
-
-    st.write('開始日時：'+ sim_start_date)
-
-    plot_chart2(sim_data)
-
-
-
-# Streamlit App
-def main():
-    # stleamlit タイトルとテキストを記入
-    st.title(SHEET_NAME +'の株価')
-
-    # データフレームの表示
-    st.title('株価の推移グラフ')
-    st.write(df)
-
-    # グラフの表示
-    st.write('終値と日時を表示')
-    plot_chart(df)
-
-    st.write('シミュレーションについて')
-    sim_start_date = st.date_input('開始日時')
-    sim_end_date = st.date_input('終了日時')
-
-    st.write('開始日時：'+ sim_start_date)
-
-    plot_chart2(sim_data)
-
-if __name__ == '__main__':
-    main()
-
-'''
