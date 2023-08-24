@@ -1,0 +1,12 @@
+# .gitignore
+
+# Virtual environment
+env/
+
+# Cached files
+__pycache__/
+*.pyc
+*.pyo
+
+# Other system-specific files
+.DS_Store
